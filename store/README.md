@@ -105,6 +105,33 @@ Admin: `http://localhost:5173/admin/login`
 - Monitor aap ko email bhi karta hai agar server ya database down ho.
 - Optional: `SELF_URL` mein backend ka apna address likhein, to server khud ko har 13 minute ping karta hai.
 
+## 5B. Card ke baghair: backend bhi Vercel par
+
+Render card maange aur aap na dena chahein to backend bhi Vercel par chal sakta hai. Vercel ke docs ke mutabiq
+Express app Vercel par ek "Vercel Function" ban jata hai.
+
+**Kya fayda:**
+- Hobby plan free hai. Vercel ke docs mein card ka zikr sirf Pro par upgrade karte waqt hai (signup par maange ya nahi, docs mein saaf nahi likha).
+- Render ki tarah 15 minute baad "soya hua server" nahi hota. Docs ke mutabiq Fluid compute cold start kam karta hai.
+- Hobby ki limits (docs ke mutabiq): function ki max muddat 300 second, mahine ke 10 lakh invocations, 4 CPU-ghante. Aksar limit paar hone par bill nahi aata, 30 din ka intezar karna padta hai.
+- Hobby mein logs sirf 1 ghante ke milte hain, isliye masla aaye to jaldi dekhein.
+- Vercel ka Hobby plan personal use ke liye hai (ek third-party article ke mutabiq, Vercel ke terms khud parh lein). Portfolio demo ke liye theek hai. Asli business ban jaye to Pro lena hoga.
+
+**Steps (backend):**
+1. vercel.com par **Add New** se **Project**, wahi `veloura-store` repo.
+2. **Root Directory:** `server`. Framework khud Express pakad leta hai.
+3. **Environment Variables:** `NODE_ENV=production`, `MONGO_URI`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `JWT_SECRET`. `CLIENT_URL` abhi khali.
+4. **Deploy.** Phir `https://xxxx.vercel.app/api/health` kholein: `"status":"ok","db":"connected"` aana chahiye.
+5. Atlas **Network Access** mein `0.0.0.0/0` zaroori hai (Vercel ke IP badalte rehte hain).
+
+**Steps (frontend):** alag doosra Vercel project, **Root Directory** `client`, aur `VITE_API_URL` = `https://xxxx.vercel.app/api` (backend ka address, aakhir mein `/api`). Phir deploy.
+
+**Dhyan dein:**
+- Backend wale Vercel address ke liye main production address (jo project ke naam se banta hai) istemal karein, kisi khaas deploy ka lamba address nahi.
+- Agar API ke jawab mein "Authentication Required" jaisa Vercel ka page aaye to project ke **Settings, Deployment Protection** mein dekhein. API ka production address public hona chahiye.
+- Is code ko maine Vercel par chala kar test nahi kiya. Pehli deploy par `/api/health` zaroor check karein.
+- Is surat mein in-memory rate limit har instance ka alag hota hai, aur `SELF_URL` aur uptime monitor ki zaroorat nahi.
+
 ## 6. Naye order ki khabar (bohat zaroori)
 
 Order sirf admin panel mein aata hai, aap ko khud nahi batata. Is liye ye lagayein (dono optional, dono ek saath bhi chal sakte hain):
@@ -163,3 +190,5 @@ Products badalne ya photos lagane ke baad `npm run snapshot` dobara chalayein au
 ## Sources
 - Render free tier: https://render.com/docs/free
 - Atlas free cluster pause: https://mongodb.com/docs/atlas/pause-terminate-cluster/
+- Express on Vercel: https://vercel.com/docs/frameworks/backend/express
+- Vercel Hobby plan: https://vercel.com/docs/plans/hobby

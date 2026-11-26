@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 
+const { connectDb } = require("./db");
 const security = require("./middleware/security");
 const rateLimit = require("./middleware/rateLimit");
 const requireDb = require("./middleware/requireDb");
@@ -22,12 +23,9 @@ if (!process.env.JWT_SECRET) {
   console.warn("JWT_SECRET set nahi hai. Development secret use ho raha hai.");
 }
 
-const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/veloura_store";
-const PORT = process.env.PORT || 3000;
-
 const app = express();
 app.disable("x-powered-by");
-app.set("trust proxy", 1); // Render/Railway proxy ke peeche asli IP (rate limit ke liye)
+app.set("trust proxy", 1); // Render/Vercel proxy ke peeche asli IP (rate limit ke liye)
 
 // CLIENT_URL mein comma se alag kai addresses ho sakte hain
 const allowedOrigins = (process.env.CLIENT_URL || "")
@@ -49,24 +47,21 @@ app.use(
 app.use(security);
 app.use(express.json({ limit: "200kb" }));
 
-// Health check: uptime monitor yahin ping karta hai. Database ko bhi chhoota hai.
+// Health check: uptime monitor yahin ping karta hai. Database se judne ki koshish bhi karta hai.
 app.get("/api/health", async (req, res) => {
-  const states = ["disconnected", "connected", "connecting", "disconnecting"];
-  const db = states[mongoose.connection.readyState] || "unknown";
   let ok = false;
-
-  if (mongoose.connection.readyState === 1) {
-    try {
-      await mongoose.connection.db.admin().ping();
-      ok = true;
-    } catch {
-      ok = false;
-    }
+  try {
+    await connectDb();
+    await mongoose.connection.db.admin().ping();
+    ok = true;
+  } catch {
+    ok = false;
   }
 
+  const states = ["disconnected", "connected", "connecting", "disconnecting"];
   res.status(ok ? 200 : 503).json({
     status: ok ? "ok" : "degraded",
-    db,
+    db: states[mongoose.connection.readyState] || "unknown",
     uptime: Math.round(process.uptime()),
   });
 });
@@ -97,58 +92,68 @@ app.use((err, req, res, next) => {
   res.status(500).json({ message: "Server error" });
 });
 
-// ---------- Database: connect na ho to bhi server zinda rehta hai aur dobara koshish karta hai ----------
-let retryTimer = null;
-
-async function connectWithRetry(attempt = 1) {
-  try {
-    await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 10000 });
-    console.log("MongoDB connected");
-  } catch (err) {
-    const waitMs = Math.min(30000, 2000 * attempt);
-    console.error(
-      `MongoDB connection failed (attempt ${attempt}): ${err.message}. Retrying in ${waitMs / 1000}s...`
-    );
-    retryTimer = setTimeout(() => connectWithRetry(attempt + 1), waitMs);
-  }
-}
-
-mongoose.connection.on("disconnected", () => console.warn("MongoDB disconnected. Driver reconnect karne ki koshish karega."));
+mongoose.connection.on("disconnected", () => console.warn("MongoDB disconnected."));
 mongoose.connection.on("reconnected", () => console.log("MongoDB reconnected"));
 mongoose.connection.on("error", (err) => console.error("MongoDB error:", err.message));
 
-const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-connectWithRetry();
+// ---------- Lamba chalne wala server (local, Render, Railway) ----------
+function startServer() {
+  const PORT = process.env.PORT || 5000;
+  let retryTimer = null;
 
-// ---------- Optional: free hosting par server ko jagaye rakhna ----------
-// SELF_URL=https://your-backend.onrender.com set karein. Behtar tareeqa: bahar se uptime monitor lagana (README dekhein).
-const selfUrl = (process.env.SELF_URL || "").replace(/\/$/, "");
-if (selfUrl) {
-  const pinger = setInterval(() => {
-    fetch(`${selfUrl}/api/health`).catch((e) => console.warn("Keep-alive ping failed:", e.message));
-  }, 13 * 60 * 1000);
-  pinger.unref();
-  console.log(`Keep-alive ping enabled for ${selfUrl}`);
-}
-
-if (isProd && (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === "admin12345")) {
-  console.warn("ADMIN_PASSWORD default ya khali hai. Admin login band rahega jab tak mazboot password set na ho.");
-}
-
-// ---------- Saaf band hona ----------
-function shutdown(signal) {
-  console.log(`${signal} received, shutting down...`);
-  clearTimeout(retryTimer);
-  server.close(async () => {
+  // Database na mile to server zinda rehta hai aur dobara koshish karta rehta hai
+  async function connectWithRetry(attempt = 1) {
     try {
-      await mongoose.connection.close();
-    } catch {
-      /* ignore */
+      await connectDb();
+      console.log("MongoDB connected");
+    } catch (err) {
+      const waitMs = Math.min(30000, 2000 * attempt);
+      console.error(
+        `MongoDB connection failed (attempt ${attempt}): ${err.message}. Retrying in ${waitMs / 1000}s...`
+      );
+      retryTimer = setTimeout(() => connectWithRetry(attempt + 1), waitMs);
     }
-    process.exit(0);
-  });
-  setTimeout(() => process.exit(1), 10000).unref();
+  }
+
+  const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  connectWithRetry();
+
+  // Optional: free hosting par server ko jagaye rakhna. SELF_URL=https://your-backend.onrender.com
+  const selfUrl = (process.env.SELF_URL || "").replace(/\/$/, "");
+  if (selfUrl) {
+    const pinger = setInterval(() => {
+      fetch(`${selfUrl}/api/health`).catch((e) => console.warn("Keep-alive ping failed:", e.message));
+    }, 13 * 60 * 1000);
+    pinger.unref();
+    console.log(`Keep-alive ping enabled for ${selfUrl}`);
+  }
+
+  if (isProd && (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === "admin12345")) {
+    console.warn("ADMIN_PASSWORD default ya khali hai. Admin login band rahega jab tak mazboot password set na ho.");
+  }
+
+  function shutdown(signal) {
+    console.log(`${signal} received, shutting down...`);
+    clearTimeout(retryTimer);
+    server.close(async () => {
+      try {
+        await mongoose.connection.close();
+      } catch {
+        /* ignore */
+      }
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10000).unref();
+  }
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:", reason));
 }
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:", reason));
+
+// `node server.js` (npm start / npm run dev) par server chalta hai.
+// Vercel par (VERCEL=1) ya require() hone par sirf app export hota hai, listen nahi hota.
+if (require.main === module && !process.env.VERCEL) {
+  startServer();
+}
+
+module.exports = app;

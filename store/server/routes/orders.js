@@ -192,8 +192,10 @@ router.post("/", createLimiter, async (req, res, next) => {
 
     reserved.length = 0; // order ban gaya, stock wapas nahi karna
 
-    // Order save ho chuka hai. Notification background mein, jawab ko nahi rokti.
-    notifyNewOrder(order.toObject());
+    // Order save ho chuka hai. Notification kabhi fail ho to bhi order par asar nahi.
+    // Vercel (serverless) par jawab dene ke baad process ruk sakta hai, isliye wahan intezar karte hain.
+    if (process.env.VERCEL) await notifyNewOrder(order.toObject());
+    else notifyNewOrder(order.toObject());
 
     res.status(201).json(publicOrder(order));
   } catch (err) {
